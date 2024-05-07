@@ -78,8 +78,12 @@ namespace SimpleReactionMachine
                     case ConsoleKey.Escape:
                         quitePressed = true;
                         break;
+                    case ConsoleKey.P: // Assigning the 'P' key to pause
+                        contoller.PausePressed();
+                        break;
                 }
             }
+
         }
 
         // This event occurs every 10 msec
@@ -128,16 +132,6 @@ namespace SimpleReactionMachine
         }
     }
 
-    public enum State
-    {
-        On,
-        Ready,
-        Wait,
-        Running,
-        GameOver,
-        Results
-    }
-
     public class EnhancedReactionController : IController
     {
         // Settings for the game times
@@ -149,155 +143,242 @@ namespace SimpleReactionMachine
         private const int RESULTS_TIME = 500;    // Display average time for 5 sec, in ticks
         private const double TICKS_PER_SECOND = 100.0; // Based on 10ms ticks
 
-        // Instance variables and properties
         private State _state;
-        private IGui _gui;
-        private IRandom _rng;
-        private int _ticks;
-        private int _games;
-        private int _totalReactionTime;
-        private bool _gameFinished;
-        private int _waitTime;
+        private IGui Gui { get; set; }
+        private IRandom Rng { get; set; }
+        private int Ticks { get; set; }
+        private int Games { get; set; }
+        private int TotalReactionTime { get; set; }
 
         public void Connect(IGui gui, IRandom rng)
         {
-            _gui = gui;
-            _rng = rng;
+            Gui = gui;
+            Rng = rng;
             Init();
         }
 
         public void Init()
         {
-            Next(State.On);
+            _state = new OnState(this);
         }
 
         public void CoinInserted()
         {
-            switch (_state)
-            {
-                case State.On:
-                    Next(State.Ready);
-                    return;
-                default:
-                    return;
-            }
+            _state.CoinInserted();
         }
 
         public void GoStopPressed()
         {
-            _gameFinished = false;
-            switch (_state)
-            {
-                case State.Ready:
-                    Next(State.Wait);
-                    return;
-                case State.Wait:
-                    Next(State.On);
-                    return;
-                case State.Running:
-                    if (!_gameFinished)
-                    {
-                        _totalReactionTime += _ticks;
-                        _gameFinished = true;
-                    }
-                    Next(State.GameOver);
-                    return;
-                case State.GameOver:
-                    CheckGames();
-                    return;
-                case State.Results:
-                    Next(State.On);
-                    return;
-                default:
-                    return;
-            }
+            _state.GoStopPressed();
         }
 
-        public void CheckGames()
+        public void PausePressed()
         {
-            if (_games == 3)
-            {
-                Next(State.Results);
-                return;
-            }
-            Next(State.Wait);
+            _state.PausePressed();
         }
 
         public void Tick()
         {
-            _gameFinished = false;
-            switch (_state)
+            _state.Tick();
+        }
+
+        void SetState(State state)
+        {
+            _state = state;
+        }
+
+
+        public void PrintGames()
+        {
+            Console.WriteLine("Current game count: " + Games.ToString());
+        }
+
+        abstract class State
+        {
+            protected EnhancedReactionController controller;
+            public State(EnhancedReactionController con)
             {
-                case State.Ready:
-                    _ticks++;
-                    if (_ticks == MAX_READY_TIME)
-                        Next(State.On);
-                    return;
-                case State.Wait:
-                    _ticks++;
-                    if (_ticks == _waitTime)
-                    {
-                        _games++;
-                        Next(State.Running);
-                    }
-                    return;
-                case State.Running:
-                    _ticks++;
-                    _gui.SetDisplay((_ticks / TICKS_PER_SECOND).ToString("0.00"));
-                    if (_ticks == MAX_GAME_TIME)
-                    {
-                        if (!_gameFinished)
-                        {
-                            _totalReactionTime += _ticks;
-                            _gameFinished = true;
-                        }
-                        Next(State.GameOver);
-                    }
-                    return;
-                case State.GameOver:
-                    _ticks++;
-                    if (_ticks == GAMEOVER_TIME)
-                        CheckGames();
-                    return;
-                case State.Results:
-                    _ticks++;
-                    if (_ticks == RESULTS_TIME)
-                        Next(State.On);
-                    return;
-                default:
-                    return;
+                controller = con;
+            }
+            public abstract void CoinInserted();
+            public abstract void GoStopPressed();
+            public abstract void PausePressed();
+            public abstract void Tick();
+        }
+
+        class OnState : State
+        {
+            public OnState(EnhancedReactionController con) : base(con)
+            {
+                controller.Games = 0;
+                controller.TotalReactionTime = 0;
+                controller.Gui.SetDisplay("Insert coin");
+            }
+            public override void CoinInserted()
+            {
+                controller.SetState(new ReadyState(controller));
+            }
+            public override void GoStopPressed() { }
+            public override void PausePressed() { }
+            public override void Tick() { }
+        }
+
+        class ReadyState : State
+        {
+            public ReadyState(EnhancedReactionController con) : base(con)
+            {
+                controller.Gui.SetDisplay("Press Go!");
+                controller.Ticks = 0;
+            }
+            public override void CoinInserted() { }
+            public override void GoStopPressed()
+            {
+                controller.SetState(new WaitState(controller));
+            }
+            public override void PausePressed() { }
+            public override void Tick()
+            {
+                controller.Ticks++;
+                if (controller.Ticks == MAX_READY_TIME)
+                    controller.SetState(new OnState(controller));
             }
         }
 
-        void Next(State state)
+        class WaitState : State
         {
-            _state = state;
-            _ticks = 0;
-
-            switch (_state)
+            private int _waitTime;
+            public WaitState(EnhancedReactionController con) : base(con)
             {
-                case State.On:
-                    _gui.SetDisplay("Insert coin");
-                    _games = 0;
-                    _totalReactionTime = 0;
-                    break;
-                case State.Ready:
-                    _gui.SetDisplay("Press GO!");
-                    break;
-                case State.Wait:
-                    _waitTime = _rng.GetRandom(MIN_WAIT_TIME, MAX_WAIT_TIME);
-                    _gui.SetDisplay("Wait...");
-                    break;
-                case State.Running:
-                    _gui.SetDisplay("0.00");
-                    break;
-                case State.Results:
-                    _gui.SetDisplay("Average: "
-                    + (((double)_totalReactionTime / _games) / TICKS_PER_SECOND)
+                controller.Gui.SetDisplay("Wait...");
+                controller.Ticks = 0;
+                _waitTime = controller.Rng.GetRandom(MIN_WAIT_TIME, MAX_WAIT_TIME);
+            }
+            public override void CoinInserted() { }
+            public override void GoStopPressed()
+            {
+                controller.SetState(new OnState(controller));
+            }
+            public override void PausePressed()
+            {
+                controller.SetState(new PausedState(controller));
+            }
+            public override void Tick()
+            {
+                controller.Ticks++;
+                if (controller.Ticks == _waitTime)
+                {
+                    controller.Games++;
+                    controller.SetState(new RunningState(controller));
+                }
+            }
+        }
+
+        class RunningState : State
+        {
+            private bool gameFinished = false;
+
+            public RunningState(EnhancedReactionController con) : base(con)
+            {
+                controller.Gui.SetDisplay("0.00");
+                controller.Ticks = 0;
+            }
+
+            public override void CoinInserted() { }
+
+            public override void GoStopPressed()
+            {
+                if (!gameFinished)
+                {
+                    controller.TotalReactionTime += controller.Ticks;
+                    gameFinished = true;
+                }
+                controller.SetState(new GameOverState(controller));
+            }
+
+            public override void PausePressed() { }
+
+            public override void Tick()
+            {
+                controller.Ticks++;
+                controller.Gui.SetDisplay(
+                    (controller.Ticks / TICKS_PER_SECOND).ToString("0.00"));
+                if (controller.Ticks == MAX_GAME_TIME)
+                {
+                    if (!gameFinished)
+                    {
+                        controller.TotalReactionTime += controller.Ticks;
+                        gameFinished = true;
+                    }
+                    controller.SetState(new GameOverState(controller));
+                }
+            }
+        }
+
+        class PausedState : State
+        {
+            public PausedState(EnhancedReactionController con) : base(con)
+            {
+                controller.Gui.SetDisplay("Paused");
+            }
+
+            public override void CoinInserted() { }
+            public override void GoStopPressed() { }
+            public override void PausePressed()
+            {
+                controller.SetState(new WaitState(controller));
+            }
+            public override void Tick() { }
+        }
+
+        class GameOverState : State
+        {
+            public GameOverState(EnhancedReactionController con) : base(con)
+            {
+                controller.Ticks = 0;
+            }
+            public override void CoinInserted() { }
+            public override void GoStopPressed()
+            {
+                CheckGames();
+            }
+            public override void PausePressed() { }
+            public override void Tick()
+            {
+                controller.Ticks++;
+                if (controller.Ticks == GAMEOVER_TIME)
+                    CheckGames();
+            }
+            private void CheckGames()
+            {
+                if (controller.Games == 3)
+                {
+                    controller.SetState(new ResultsState(controller));
+                    return;
+                }
+                controller.SetState(new WaitState(controller));
+            }
+        }
+
+        class ResultsState : State
+        {
+            public ResultsState(EnhancedReactionController con) : base(con)
+            {
+                controller.Gui.SetDisplay("Average: " +
+                    (((double)controller.TotalReactionTime / controller.Games) / TICKS_PER_SECOND)
                     .ToString("0.00"));
-                    break;
-                default:
-                    break;
+                controller.Ticks = 0;
+            }
+            public override void CoinInserted() { }
+            public override void GoStopPressed()
+            {
+                controller.SetState(new OnState(controller));
+            }
+            public override void PausePressed() { }
+            public override void Tick()
+            {
+                controller.Ticks++;
+                if (controller.Ticks == RESULTS_TIME)
+                    controller.SetState(new OnState(controller));
             }
         }
     }
